@@ -90,6 +90,27 @@ ghost's, and earning a few seconds of rest at every wall. Going up a level
 squeezes that rest out of one tier at a time; passing level 6 means dropping the
 baseline 10% and starting the ladder again.
 
+## Sound
+
+Short tones, synthesised in the browser — no files, so they work with no signal
+like everything else here.
+
+| when | tone |
+|------|------|
+| 3, 2, 1 into every wall | C, short |
+| the wall itself | G, half a second |
+| a wall that opens a new gear | C – E – G, three tenths each |
+
+They're at octave 5 (523 / 659 / 784 Hz). The intervals are the ones asked for;
+the octave is not, because C1 is 32.7 Hz and a phone speaker cannot move air at
+it — let alone over a swimming pool. Change `OCTAVE` to shift all of it at once.
+
+Every tone is handed to the audio clock up to a third of a second early, so the
+beat lands where the hand does rather than where the frame loop happened to be.
+Browsers won't make any sound before a tap, so the first one can't come before
+START; media volume needs to be up, and on iOS the physical silent switch mutes
+it (Android has no equivalent).
+
 ## Using it
 
 Swipe **left** on the clock for PAUSE, SKIP and END. Mid-lap the face itself is

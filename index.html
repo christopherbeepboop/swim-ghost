@@ -1183,6 +1183,30 @@ class GhostEngine {
     return multiplier(tier, this.level) / multiplier(this.currentLapTier, this.level);
   }
 
+  /** The next moment the ghost touches a wall, and whether that touch opens a
+   *  new gear — `{ at, opensTier }`, or null when nothing is coming.
+   *
+   *  Told in ADVANCE, which is the whole point: a tone fired at the frame that
+   *  happens to notice the wall arrives whenever that frame ran, and the ear
+   *  hears the jitter the eye forgives. Knowing the moment ahead of time lets
+   *  the sound be handed to the audio clock, which keeps it.
+   *
+   *  A rest counts as a wall too: the swimmer pushes off when it ends, and what
+   *  it opens is a rep — or the cooldown, which is no gear at all. */
+  nextBeat() {
+    if (this.phase === PHASE.rest) {
+      if (this.restStart === null) return null;
+      return { at: this.restStart + this.restSeconds, opensTier: this.restLeadsToRep !== null };
+    }
+    if (!this.isPacing) return null;
+    // The pulse after this one closes the tier — so this one opens the next,
+    // unless what follows is the rest at the end of a rep.
+    const opensTier = this.phase === PHASE.racing
+      && this.pulsesInSegment + 1 >= TIER_LAPS[this.activeTier] * LENGTHS_PER_LAP
+      && this.activeTier < LAST_TIER;
+    return { at: this.nextPulse, opensTier };
+  }
+
   /** The faster gears actually worth a mark on this revolution, as
    *  `{ tier, turns }`, already thinned of the two ways a mark says nothing:
    *
@@ -1427,9 +1451,106 @@ function releaseWakeLock() {
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
 }
 
+/* ==================================================================== sound */
+/*
+  Short tones on the ghost's wall touches, synthesised — no files, so it works
+  at a pool with no signal like everything else here.
+
+  WHAT IT PLAYS
+    · 3, 2, 1 into every wall   a short C
+    · the wall itself           G, half a second
+    · a wall that opens a gear  C - E - G, three tenths each
+
+  THE OCTAVE IS NOT THE ONE ASKED FOR, and deliberately. C1 is 32.7 Hz: below
+  what a phone speaker can move air at, and an octave and a half below where a
+  swimming pool stops drowning everything. The intervals are exactly as
+  specified — root, major third, fifth — moved up to where a phone is loudest.
+  Change OCTAVE alone to move all of it together.
+
+  SCHEDULED, NOT FIRED. Every tone is handed to the audio clock at an exact
+  moment, up to LOOKAHEAD seconds early, so the beat lands where the hand does
+  rather than where the frame loop happened to be. Nothing is played from a
+  frame callback.
+*/
+
+const OCTAVE = 5;                 // C5 523 Hz · E5 659 Hz · G5 784 Hz
+const LOOKAHEAD = 0.35;           // seconds of schedule handed to the audio clock
+
+/** Equal temperament, semitones up from C. C0 is 16.35 Hz. */
+const note = (semitones) => 16.351597831287414 * Math.pow(2, OCTAVE + semitones / 12);
+const TONE = { root: note(0), third: note(4), fifth: note(7) };
+
+let audio = null;
+let scheduledBeats = new Set();
+
+/** The tap that starts a swim is also the gesture browsers require before they
+ *  will make any sound at all. */
+function unlockAudio() {
+  try {
+    if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume();
+  } catch (_) { audio = null; }
+}
+
+/** One tone, at an exact moment on the audio clock.
+ *  Triangle rather than sine: the extra harmonics are what carry it across a
+ *  wet, echoing room. The short ramps stop each tone opening and closing with
+ *  a click. */
+function tone(at, freq, seconds, peak) {
+  const osc = audio.createOscillator();
+  const gain = audio.createGain();
+  osc.type = 'triangle';
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(peak, at + 0.012);
+  gain.gain.setValueAtTime(peak, at + Math.max(seconds - 0.06, 0.02));
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + seconds);
+  osc.connect(gain).connect(audio.destination);
+  osc.start(at);
+  osc.stop(at + seconds + 0.02);
+}
+
+/** Hand the audio clock anything due inside the look-ahead window, once. */
+function scheduleSound(now) {
+  if (!audio || audio.state !== 'running' || engine.paused) return;
+  const beat = engine.nextBeat();
+  if (!beat) return;
+
+  // Wall clock to audio clock. Recomputed every frame, and only ever applied
+  // to something a fraction of a second away, so the two can't drift apart
+  // far enough to matter.
+  const offset = audio.currentTime - Date.now() / 1000;
+  const horizon = now + LOOKAHEAD;
+  const due = (t) => t > now - 0.05 && t <= horizon;
+  const claim = (key) => {
+    if (scheduledBeats.has(key)) return false;
+    scheduledBeats.add(key);
+    if (scheduledBeats.size > 64) scheduledBeats = new Set([key]);
+    return true;
+  };
+
+  for (const count of [3, 2, 1]) {
+    const at = beat.at - count;
+    if (due(at) && claim(`t${at.toFixed(2)}`)) tone(at + offset, TONE.root, 0.11, 0.16);
+  }
+
+  if (due(beat.at) && claim(`g${beat.at.toFixed(2)}`)) {
+    const at = beat.at + offset;
+    if (beat.opensTier) {
+      tone(at, TONE.root, 0.3, 0.3);
+      tone(at + 0.3, TONE.third, 0.3, 0.3);
+      tone(at + 0.6, TONE.fifth, 0.3, 0.3);
+    } else {
+      tone(at, TONE.fifth, 0.5, 0.3);
+    }
+  }
+}
+
 // Android drops the lock whenever the tab is hidden; take it back on return.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && engine && !wakeLock) acquireWakeLock();
+  if (document.visibilityState !== 'visible' || !engine) return;
+  if (!wakeLock) acquireWakeLock();
+  if (audio && audio.state === 'suspended') audio.resume();
 });
 
 /* ================================================================= session */
@@ -1443,6 +1564,8 @@ function startSession() {
   engine.start(Date.now() / 1000);
 
   pipSignature = '';
+  scheduledBeats = new Set();
+  unlockAudio();
   el.setup.classList.remove('on');
   el.swim.classList.add('on');
   setPage(0, false);
@@ -1499,7 +1622,9 @@ $('endno').addEventListener('click', () => answerLevelUp(false));
 
 function frame() {
   raf = requestAnimationFrame(frame);
-  engine.tick(Date.now() / 1000);
+  const now = Date.now() / 1000;
+  engine.tick(now);
+  scheduleSound(now);
   // PAUSE parks the schedule, but every readout is measured against the clock
   // being passed in — so the face has to be drawn at the instant it froze, or
   // the hand carries on sweeping over a ghost that has stopped.
