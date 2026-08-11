@@ -1183,28 +1183,42 @@ class GhostEngine {
     return multiplier(tier, this.level) / multiplier(this.currentLapTier, this.level);
   }
 
-  /** The next moment the ghost touches a wall, and whether that touch opens a
-   *  new gear — `{ at, opensTier }`, or null when nothing is coming.
+  /** The next moment worth a sound, and whether it opens a new gear —
+   *  `{ at, opensTier }`, or null when nothing is coming.
    *
-   *  Told in ADVANCE, which is the whole point: a tone fired at the frame that
-   *  happens to notice the wall arrives whenever that frame ran, and the ear
-   *  hears the jitter the eye forgives. Knowing the moment ahead of time lets
-   *  the sound be handed to the audio clock, which keeps it.
+   *  ONE BEAT PER LAP, not per length. The ghost touches a wall every 25m, but
+   *  the mid-lap turn is silent: the hand counts a whole 50m lap and so does the
+   *  number under it, and a countdown into the turn would be a second rhythm
+   *  running against the one on screen.
    *
-   *  A rest counts as a wall too: the swimmer pushes off when it ends, and what
-   *  it opens is a rep — or the cooldown, which is no gear at all. */
+   *  Told in ADVANCE, which is the point: a tone fired at the frame that happens
+   *  to notice the wall arrives whenever that frame ran, and the ear hears the
+   *  jitter the eye forgives. Knowing the moment ahead lets the sound be handed
+   *  to the audio clock, which keeps it.
+   *
+   *  A rest ends on a beat too — the swimmer pushes off — and what it opens is a
+   *  rep, or the cooldown, which is no gear at all. */
   nextBeat() {
     if (this.phase === PHASE.rest) {
       if (this.restStart === null) return null;
       return { at: this.restStart + this.restSeconds, opensTier: this.restLeadsToRep !== null };
     }
     if (!this.isPacing) return null;
-    // The pulse after this one closes the tier — so this one opens the next,
-    // unless what follows is the rest at the end of a rep.
+
+    // The lead-in's GO opens the first lap rather than closing one.
+    if (this.awaitingFirstPulse) return { at: this.nextPulse, opensTier: false };
+
+    // Whichever pulse CLOSES the lap: this one if a length has already been
+    // swum, otherwise the one after it. Every segment is a whole number of laps,
+    // so those two pulses are never split across a tier and `currentPace` holds
+    // for both.
+    const onSecondLength = this.pulsesInSegment % LENGTHS_PER_LAP === 1;
+    const at = onSecondLength ? this.nextPulse : this.nextPulse + this.currentPace;
+    const closing = this.pulsesInSegment + (onSecondLength ? 1 : 2);
     const opensTier = this.phase === PHASE.racing
-      && this.pulsesInSegment + 1 >= TIER_LAPS[this.activeTier] * LENGTHS_PER_LAP
+      && closing >= TIER_LAPS[this.activeTier] * LENGTHS_PER_LAP
       && this.activeTier < LAST_TIER;
-    return { at: this.nextPulse, opensTier };
+    return { at, opensTier };
   }
 
   /** The faster gears actually worth a mark on this revolution, as

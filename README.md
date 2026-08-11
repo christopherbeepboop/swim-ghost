@@ -97,9 +97,13 @@ like everything else here.
 
 | when | tone |
 |------|------|
-| 3, 2, 1 into every wall | C, short |
-| the wall itself | G, half a second |
-| a wall that opens a new gear | C – E – G, three tenths each |
+| 3, 2, 1 into the end of a lap | C, short |
+| the lap's end | G, half a second |
+| a lap that opens a new gear | C – E – G, three tenths each |
+
+One beat per **lap**, not per length: the mid-lap turn is silent. The hand counts
+a whole 50m and so does the number under it, so a countdown into the turn would
+be a second rhythm running against the one on screen.
 
 They're at octave 5 (523 / 659 / 784 Hz). The intervals are the ones asked for;
 the octave is not, because C1 is 32.7 Hz and a phone speaker cannot move air at
