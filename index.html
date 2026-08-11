@@ -361,8 +361,18 @@ html, body {
   font-size: var(--lapnum);
   line-height: 1;
   color: var(--ink);
-  min-height: 1em;
+  /* Reserved against the NUMBER's size, not the current one, so the dial sits
+     at the same height whether this slot holds 42, a label, or nothing. */
+  min-height: var(--lapnum);
   text-shadow: 0 calc(var(--lapnum) * 0.030) calc(var(--lapnum) * 0.055) rgba(0, 0, 0, 0.22);
+}
+/* Same slot, said quietly: what the end screen puts where the count was. */
+#lapnum.note {
+  font-size: calc(var(--headline) * 0.17);
+  line-height: var(--lapnum);
+  letter-spacing: 1px;
+  opacity: 0.6;
+  text-shadow: none;
 }
 #lapnum.hide { visibility: hidden; display: block !important; }
 
@@ -379,6 +389,28 @@ html, body {
   opacity: 0.6;
   white-space: nowrap;
 }
+
+/* Cut the rest short. Takes the pip block's slot — the same place the swim face
+   keeps its pips and the end screen keeps its answers — so the rest screen adds
+   a control without adding a position. Visible for the whole rest, including
+   the last five seconds, where it simply does nothing: the screen must not
+   change shape as the count runs out. */
+#restskip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, calc(-50% + var(--mc)));
+  font: inherit;
+  font-size: calc(var(--headline) * 0.19);
+  letter-spacing: 2px;
+  padding: calc(var(--pip) * 0.55) calc(var(--pip) * 2.4);
+  border-radius: 999px;
+  border: 2px solid var(--ink);
+  background: none;
+  color: var(--ink);
+  opacity: 0.55;
+}
+#restskip:active { background: rgba(var(--ink-rgb), 0.12); }
 
 #endchoice {
   position: absolute;
@@ -555,6 +587,7 @@ html, body {
           <div id="handwrap"><div id="hand"></div></div>
 
           <div id="headline" class="hide"></div>
+          <button id="restskip" class="hide">SKIP</button>
           <div id="endword" class="hide"></div>
           <div id="endchoice" class="hide">
             <button id="endno" aria-label="no, hold this level">
@@ -717,6 +750,9 @@ class GhostEngine {
 
     this.paused = false;
     this.pauseStart = null;
+
+    /** The swimmer stopped it rather than the cooldown running out. */
+    this.endedEarly = false;
   }
 
   /** Ghost pace for the tier being swum now, per 25m LENGTH. The one place the
@@ -880,8 +916,9 @@ class GhostEngine {
     this.restStart = null;
   }
 
-  finish() {
+  finish(early = false) {
     this.phase = PHASE.finished;
+    this.endedEarly = early;
   }
 
   /* ------------------------------------------------------- pause and skip */
@@ -904,8 +941,26 @@ class GhostEngine {
     }
   }
 
+  /** Cut a rest short: jump to the last LEAD_IN seconds, so the count is
+   *  already at 5 and the next rep opens five seconds later.
+   *
+   *  The watch has no such control, deliberately — every manual input allowed
+   *  near its schedule has false-fired in the water, and a rest there ends on
+   *  heart-rate recovery or not at all. Neither reason survives the move to a
+   *  phone: this rest is a stopwatch rather than a recovery gate, and the
+   *  button is on a dry screen being tapped by someone stood at the wall.
+   *
+   *  Moves restStart rather than restSeconds, so the chosen duration is
+   *  untouched and the next rest is still the full length. */
+  skipRest(now) {
+    if (this.phase !== PHASE.rest || this.paused) return;
+    const releaseAt = this.restStart + this.restSeconds - LEAD_IN;
+    if (now >= releaseAt) return;                  // already inside the count
+    this.restStart = now - (this.restSeconds - LEAD_IN);
+  }
+
   /** Jump a whole chunk: warmup → its rest, a tier → the next (or the rep's
-   *  rest), cooldown → the end. A rest is not skippable. */
+   *  rest), cooldown → the end. A rest goes through skipRest instead. */
   skipSegment(now) {
     if (this.paused) return;
     switch (this.phase) {
@@ -1223,6 +1278,7 @@ const el = {
   mark: [$('mark0'), $('mark1')],
   handwrap: $('handwrap'), hand: $('hand'), shadowwrap: $('shadowwrap'),
   headline: $('headline'), endword: $('endword'), endchoice: $('endchoice'),
+  restskip: $('restskip'),
   lapnum: $('lapnum'),
   start: $('start'), pause: $('pause'), skip: $('skip'), end: $('end'),
 };
@@ -1404,7 +1460,17 @@ function endSession() {
   el.setup.classList.add('on');
 }
 
-el.end.addEventListener('click', endSession);
+// END finishes the swim rather than abandoning it: the same screen a completed
+// cooldown reaches, asking the one question that carries into the next session.
+// A swim cut short can still have been held — and if it wasn't, the honest
+// answer is one tap away.
+el.end.addEventListener('click', () => {
+  if (!engine) return;
+  if (engine.paused) engine.togglePause(Date.now() / 1000);
+  el.pause.textContent = 'PAUSE';
+  engine.finish(true);
+  setPage(0);
+});
 el.pause.addEventListener('click', () => {
   if (!engine) return;
   engine.togglePause(Date.now() / 1000);
@@ -1425,6 +1491,7 @@ function answerLevelUp(moved) {
   }
   endSession();
 }
+$('restskip').addEventListener('click', () => { if (engine) engine.skipRest(Date.now() / 1000); });
 $('endyes').addEventListener('click', () => answerLevelUp(true));
 $('endno').addEventListener('click', () => answerLevelUp(false));
 
@@ -1530,6 +1597,7 @@ function render(now) {
   // when that isn't obvious: REST. A lap needs no label and neither does the
   // 5,4,3,2,1 into the first one.
   show(el.headline, resting);
+  show(el.restskip, resting);
   if (resting) setText(el.headline, 'REST');
 
   // The swim is over and the swimmer is the only one who knows how it went —
@@ -1552,10 +1620,16 @@ function render(now) {
               : lead !== null ? lead
               : pacing ? String(e.lapSecondsRemaining(now))
               : null;
-  show(el.lapnum, count !== null);
+  // A swim that was stopped says so, in the slot the count was using. A swim
+  // that ran its cooldown out needs no comment.
+  el.lapnum.classList.toggle('note', finished);
+  show(el.lapnum, count !== null || (finished && e.endedEarly));
   if (count !== null) {
     setText(el.lapnum, count);
     el.lapnum.style.color = `rgb(${rgbForTier(resting ? null : e.currentLapTier, e.level)})`;
+  } else if (finished && e.endedEarly) {
+    setText(el.lapnum, 'YOU ENDED THE SWIM EARLY');
+    el.lapnum.style.color = `rgb(${INK_RGB})`;
   }
 }
 

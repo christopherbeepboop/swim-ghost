@@ -92,8 +92,14 @@ baseline 10% and starting the ladder again.
 
 ## Using it
 
-Swipe **left** on the clock for PAUSE, SKIP and END. Nothing on the face itself
-is tappable — a wet hand at a wall must not be able to change the schedule.
+Swipe **left** on the clock for PAUSE, SKIP and END. Mid-lap the face itself is
+untappable — a wet hand at a wall must not be able to change the schedule — but
+a rest carries a SKIP that jumps to the closing 5,4,3,2,1, and the end screen
+takes your answer.
+
+**END finishes the swim rather than abandoning it**: it goes to the same screen
+a completed cooldown reaches, says the swim was ended early, and still asks
+whether to move up. A short swim can still have been held.
 
 ## Publishing it
 
