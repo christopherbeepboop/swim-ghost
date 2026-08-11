@@ -20,8 +20,9 @@
 //  come from the cache and cost nothing.
 //
 
-const CACHE = 'ghost-v2';
-const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'ghost-v3';
+const FILES = ['./', 'index.html', 'manifest.webmanifest',
+               'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
 
 /** How long to wait for a fresh page before opening the cached one. Long enough
  *  for a slow connection, short enough that a dead one isn't a delay you'd

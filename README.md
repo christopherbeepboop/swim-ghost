@@ -7,8 +7,12 @@ Four files, no build step, no dependencies, no network.
 index.html            the whole app — markup, styles, engine, face
 manifest.webmanifest  makes "Add to Home Screen" launch it fullscreen
 sw.js                 caches the app so a pool with no signal still works
+icon-1024.png         the master — the same artwork as the iOS app icon
 icon-192.png
-icon-512.png          regenerate with: python3 ../Scripts/make_web_icons.py
+icon-512.png
+icon-maskable-512.png padded, for launchers that crop to their own shape
+tools/make_icons.sh   regenerates the three from the master
+tools/test_web_ghost.js
 ```
 
 ## What it is, and what it isn't
