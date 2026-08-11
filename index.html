@@ -445,6 +445,14 @@ html, body {
 .ctl:active { background: rgba(var(--ink-rgb), 0.12); }
 .ctl svg { width: 55%; height: 55%; display: block; }
 
+/* Inverted, because it is the one of the three you cannot take back. */
+#end {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+#end:active { background: var(--ink); opacity: 0.82; }
+
 </style>
 </head>
 <body>
@@ -559,12 +567,13 @@ html, body {
         </button>
         <button class="ctl" id="skip" aria-label="skip ahead">
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <!-- Most of a circle, open at the top right, with the head of the
-                 arrow closing it. -->
-            <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" fill="none" stroke="currentColor"
-                  stroke-width="2.3" stroke-linecap="round"/>
-            <path d="M14.5 6.0L17.3 6.7L16.6 9.5" fill="none" stroke="currentColor"
-                  stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- 300 degrees of circle, open at the top, with a solid head on the
+                 end. Both are computed from the same centre and radius, and the
+                 head is aligned to the tangent where the arc stops, so the two
+                 meet pointing the same way. -->
+            <path d="M16.63 6.48A7.2 7.2 0 1 1 9.54 5.23" fill="none" stroke="currentColor"
+                  stroke-width="2.3" stroke-linecap="butt"/>
+            <path d="M12.64 4.11L10.34 7.44L8.73 3.03Z" fill="currentColor"/>
           </svg>
         </button>
         <button class="ctl" id="end" aria-label="end the swim">
