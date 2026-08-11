@@ -1,0 +1,1646 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ghost</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#E6E8DB">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+/*
+  E-INK PAPER. Pale sage paper, warm charcoal ink, monospace throughout, and a
+  single deliberate exception to the monochrome: three colours that carry "how
+  fast is this lap, and what's next" at a wet glance. A colour on screen always
+  means a PACE — one per multiplier, not one per tier — and anything untiered
+  (warmup, cooldown, rest) stays in ink.
+
+  DEPTH is the other shared idea, and there are three planes:
+    · pending / spent — a pale wash pressed INTO the face (inset shadow)
+    · active          — solid colour lying flat on the face (no shadow)
+    · hands, big type — floating ABOVE the face (outer shadow)
+
+  Ported from SwimTheme.swift and GhostTierStyle.swift.
+*/
+:root {
+  --paper: #E6E8DB;
+  --ink:   #212119;
+  --ink-rgb: 33, 33, 25;
+  /* One per pace. Sampled from the reference watch, averaged over each hand's
+     pixels rather than eyedropped, so these are the true body colours. The
+     face reads them through --c-rgb; see PACE_RGB. */
+  --pace-100: #6E8C92;   /* ×1.00 — slate blue */
+  --pace-095: #EAAD3B;   /* ×0.95 — yellow     */
+  --pace-090: #D95E42;   /* ×0.90 — orange-red */
+  --pending: 0.20;
+
+  /* Set from JS against the dial size D. See GhostFaceLayout. */
+  --D: 320px;
+  --reach: 150px;
+  --tail: 20px;
+  --weight: 15px;
+  --pip: 16px;
+  --gap: 10px;
+  --block: 68px;
+  --mc: 86px;         /* marker centre: pips below the pivot, marker above */
+  --headline: 92px;
+  --markw: 7px;
+  --lapnum: 51px;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Roboto Mono", "DejaVu Sans Mono", monospace;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#app { position: fixed; inset: 0; }
+
+.screen { position: absolute; inset: 0; display: none; }
+.screen.on { display: block; }
+
+/* ============================================================ setup screen */
+
+#setup {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  /* `safe` so that on a short screen the column overflows DOWNWARD and scrolls,
+     rather than centring itself off the top edge and hiding its first row. */
+  justify-content: safe center;
+  overflow-y: auto;
+  gap: clamp(12px, 3vh, 30px);
+  padding: max(3vh, env(safe-area-inset-top)) 6vw max(3vh, env(safe-area-inset-bottom));
+}
+#setup.on { display: flex; }
+
+.field { width: 100%; max-width: 380px; text-align: center; }
+
+.field .label {
+  font-size: 13px;
+  letter-spacing: 1.5px;
+  opacity: 0.75;
+  margin-bottom: 10px;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+}
+
+.step {
+  font: inherit;
+  font-size: 26px;
+  line-height: 1;
+  width: 54px;
+  height: 54px;
+  border-radius: 27px;
+  border: 2px solid var(--ink);
+  background: none;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.step:active { background: rgba(var(--ink-rgb), 0.12); }
+
+.value {
+  font-size: 46px;
+  min-width: 4.2ch;
+  letter-spacing: -1px;
+}
+.value .unit { font-size: 24px; opacity: 0.6; margin-left: 1px; }
+
+/* The rung the chosen level swims — the three tier multipliers. A level is
+   otherwise an opaque number, and this is its definition, not decoration. */
+.rung {
+  margin-top: 10px;
+  font-size: 15px;
+  letter-spacing: 1px;
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+}
+/* Coloured from the value, not the position — see rgbForTier. */
+.rung span { color: rgb(var(--c-rgb)); }
+
+#start {
+  font: inherit;
+  font-weight: 600;
+  font-size: 19px;
+  letter-spacing: 2px;
+  width: 100%;
+  max-width: 380px;
+  padding: 17px 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--paper);
+}
+#start:active { opacity: 0.82; }
+
+.hint { font-size: 12px; letter-spacing: 1px; opacity: 0.45; text-align: center; }
+
+/* ================================================================== pager */
+/*
+  Page 0 is the face, page 1 the controls — the same swipe the watch uses
+  (LiveWithControls). Nothing on the face itself is tappable: a wet hand at a
+  wall must not be able to change the schedule by brushing the screen.
+*/
+
+#pager {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  width: 200%;
+  transform: translateX(0);
+}
+#pager.settling { transition: transform 0.32s cubic-bezier(0.22, 0.9, 0.3, 1); }
+.page { width: 50%; height: 100%; position: relative; }
+
+/* =================================================================== dial */
+/*
+  The face is BARE — no rim, no ticks, no numerals. The screen is the dial and
+  the hand runs nearly to its edge.
+*/
+
+/*
+  A phone has vertical room a watch does not, so the lap countdown sits BELOW
+  the dial rather than inside it. Anywhere inside, the hand would bisect it: the
+  bar runs from the pivot outward, so a number at the centre is crossed
+  permanently rather than in passing the way the pips are.
+*/
+#face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--D) * 0.03);
+}
+
+#dial {
+  position: relative;
+  flex: none;
+  width: var(--D);
+  height: var(--D);
+}
+
+.hide { display: none !important; }
+
+/* The pale wash pressed into the face — pips, the waiting stub, tier marks. */
+.pending {
+  box-shadow: inset 0 calc(var(--pip) * 0.11) calc(var(--pip) * 0.32) rgba(0, 0, 0, 0.38);
+}
+
+/* --- lap pips: mirror image of the waiting marker about the 3-9 line ------ */
+
+#pips {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, calc(-50% + var(--mc)));
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+.piprow { display: flex; gap: var(--gap); justify-content: center; --c-rgb: var(--ink-rgb); }
+.pip {
+  width: var(--pip);
+  height: var(--pip);
+  border-radius: 50%;
+  background: rgba(var(--c-rgb), var(--pending));
+}
+/* Active: solid, flat, flush with the face. */
+.pip.on { background: rgb(var(--c-rgb)); box-shadow: none; }
+
+/* --- the marker slot at 12 ----------------------------------------------- */
+/*
+  Everything that can occupy it — the next lap's stub, a heart when a rest
+  follows, the finish tick — is centred at the same point, so a swap shifts
+  nothing on the face.
+*/
+
+.slot12 {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, calc(-50% - var(--mc)));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The next lap's hand, waiting at 12: only a stub at the rim, in exactly the
+   pips' pending style, so "sunken and pale means next, solid and floating means
+   now" reads the same whether you're looking at a hand or a pip. */
+#waiting {
+  width: var(--pip);
+  height: var(--block);
+  --c-rgb: var(--ink-rgb);
+  background: rgba(var(--c-rgb), var(--pending));
+}
+
+#heart { width: calc(var(--pip) * 2.2); height: calc(var(--pip) * 2.2); }
+#heart path { fill: rgba(var(--ink-rgb), var(--pending)); }
+
+/* The finish tick is inverted relative to the pips: the DISC is the sunken pale
+   area and the tick sits flat on top in the paper colour, so it reads as a shape
+   knocked out of a pressed dish rather than an icon drawn on a button. */
+#tick { width: calc(var(--pip) * 2.6); height: calc(var(--pip) * 2.6); }
+#tickdisc { fill: rgba(var(--ink-rgb), var(--pending)); }
+
+/* --- faster-tier pace lines ---------------------------------------------- */
+/*
+  A faster gear's target: the waiting marker's own band, thinned to a seconds-
+  hand line and swung round to where that gear would close. Deliberately
+  identical in length, radius and treatment — only width and angle differ, so
+  every mark on the dial lives in one ring at one depth.
+*/
+
+.markwrap {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+.mark {
+  position: absolute;
+  width: var(--markw);
+  height: var(--block);
+  left: calc(var(--markw) / -2);
+  --c-rgb: var(--ink-rgb);
+  background: rgba(var(--c-rgb), var(--pending));
+  /* Offset first, then rotate the wrapper — so the mark orbits the pivot
+     instead of spinning in place. */
+  top: calc((var(--mc) + var(--block) / 2) * -1);
+}
+
+/* --- the hand ------------------------------------------------------------ */
+/*
+  A flat squared bar, not a capsule.
+
+  The shadow is a SECOND bar rather than a filter on the first. It carries the
+  same rotation, but its wrapper is translated before it — `translateY(...)
+  rotate(...)` applies the rotation in the hand's own space and the offset in
+  the screen's — so the light stays above the face instead of spinning round
+  with the hand.
+
+  A `filter: drop-shadow()` would have said the same thing in one line, and did,
+  until the face it was applied to turned out to be the whole dial: a filter
+  makes the browser re-render its entire region every frame, and a region that
+  size, re-filtered sixty times a second, smeared the sweep across the face as a
+  disc. Nothing here uses a CSS filter on anything that moves.
+*/
+
+#shadowwrap, #handwrap {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+#shadowbar, #hand {
+  position: absolute;
+  width: var(--weight);
+  height: calc(var(--reach) + var(--tail));
+  left: calc(var(--weight) / -2);
+  top: calc(var(--reach) * -1);
+}
+#shadowbar {
+  background: rgba(0, 0, 0, 0.13);
+  box-shadow: 0 0 calc(var(--weight) * 0.5) calc(var(--weight) * 0.06) rgba(0, 0, 0, 0.13);
+}
+#hand {
+  --c-rgb: var(--ink-rgb);
+  background: rgb(var(--c-rgb));
+}
+
+/* --- type in the dial ---------------------------------------------------- */
+
+/* The lead-in count, REST, and the finish word: one size, one slot, aligned
+   with the waiting marker, so nothing moves or resizes as the state changes. */
+#headline {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, calc(-50% - var(--mc)));
+  font-size: var(--headline);
+  line-height: 1;
+  white-space: nowrap;
+  /* text-shadow, not a filter: the digit changes every second, and a filter
+     would hand the compositor a fresh surface to re-render each time. */
+  text-shadow: 0 calc(var(--headline) * 0.030) calc(var(--headline) * 0.055) rgba(0, 0, 0, 0.22);
+}
+
+/* Seconds left in the lap, under the dial, in the current tier's colour. */
+#lapnum {
+  flex: none;
+  font-size: var(--lapnum);
+  line-height: 1;
+  color: var(--ink);
+  min-height: 1em;
+  text-shadow: 0 calc(var(--lapnum) * 0.030) calc(var(--lapnum) * 0.055) rgba(0, 0, 0, 0.22);
+}
+#lapnum.hide { visibility: hidden; display: block !important; }
+
+/* The end of a session asks one question. It takes the marker's slot and the
+   two answers take the pip block's, so the last screen of a swim lands its
+   parts exactly where every other screen has been landing them. */
+#endword {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, calc(-50% - var(--mc)));
+  font-size: calc(var(--headline) * 0.19);
+  letter-spacing: 2px;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+#endchoice {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, calc(-50% + var(--mc)));
+  display: flex;
+  gap: calc(var(--pip) * 1.4);
+}
+#endchoice button {
+  font: inherit;
+  width: calc(var(--pip) * 4.6);
+  padding: calc(var(--pip) * 0.55) 0;
+  border-radius: 999px;
+  border: 2px solid var(--ink);
+  background: none;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#endchoice button:active { background: rgba(var(--ink-rgb), 0.12); }
+#endchoice svg { width: calc(var(--pip) * 1.5); height: calc(var(--pip) * 1.5); display: block; }
+
+/* =============================================================== controls */
+
+#controls {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  padding: max(5vh, env(safe-area-inset-top)) max(9vw, env(safe-area-inset-right))
+           max(5vh, env(safe-area-inset-bottom)) max(9vw, env(safe-area-inset-left));
+}
+.ctlrow { display: flex; gap: 12px; width: 100%; }
+.ctl {
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  flex: none;
+  padding: 15px 0;
+  border-radius: 999px;
+  border: 2px solid var(--ink);
+  background: none;
+  color: var(--ink);
+}
+/* Only the pair share the width. END is not in the row, and `flex: 1` on the
+   bare class made it swell to the whole page — a full-screen ink slab that
+   ended the swim wherever you touched. */
+.ctlrow .ctl { flex: 1; }
+.ctl:active { background: rgba(var(--ink-rgb), 0.12); }
+
+/* END sits apart and smaller than the pair, because it is the one control you
+   can't take back. */
+#end {
+  border: none;
+  background: var(--ink);
+  color: var(--paper);
+  width: 55%;
+  font-size: 15px;
+  padding: 13px 0;
+  margin-top: 7vh;
+}
+#end:active { background: var(--ink); opacity: 0.82; }
+#controls .hint { margin-top: 20px; }
+
+/* A page indicator, because a swipe you don't know about is a swipe you never
+   make. Two dots, in the pips' own two-state language. */
+#dots {
+  position: absolute;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 7px;
+  justify-content: center;
+}
+#dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(var(--ink-rgb), 0.22);
+}
+#dots i.on { background: rgba(var(--ink-rgb), 0.62); }
+</style>
+</head>
+<body>
+
+<!-- Shared SVG defs. `emboss` is the inner shadow the pips get from CSS, for
+     shapes CSS can't reach: the heart and the finish tick. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <filter id="emboss" x="-50%" y="-50%" width="200%" height="200%">
+      <feOffset in="SourceAlpha" dx="0" dy="1.2" result="o"/>
+      <feGaussianBlur in="o" stdDeviation="0.9" result="b"/>
+      <feComposite in="SourceAlpha" in2="b" operator="out" result="inner"/>
+      <feFlood flood-color="#000" flood-opacity="0.38" result="c"/>
+      <feComposite in="c" in2="inner" operator="in" result="shade"/>
+      <feMerge>
+        <feMergeNode in="SourceGraphic"/>
+        <feMergeNode in="shade"/>
+      </feMerge>
+    </filter>
+  </defs>
+</svg>
+
+<div id="app">
+
+  <!-- ======================================================= setup ======= -->
+  <section id="setup" class="screen on">
+    <div class="field">
+      <div class="label">TARGET / 50m</div>
+      <div class="stepper">
+        <button class="step" data-field="baseline" data-delta="-1" aria-label="slower">&minus;</button>
+        <div class="value"><span id="v-baseline">60</span><span class="unit">s</span></div>
+        <button class="step" data-field="baseline" data-delta="1" aria-label="faster">+</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <div class="label">REST</div>
+      <div class="stepper">
+        <button class="step" data-field="rest" data-delta="-5" aria-label="shorter">&minus;</button>
+        <div class="value"><span id="v-rest">45</span><span class="unit">s</span></div>
+        <button class="step" data-field="rest" data-delta="5" aria-label="longer">+</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <div class="label">LEVEL</div>
+      <div class="stepper">
+        <button class="step" data-field="level" data-delta="-1" aria-label="easier">&minus;</button>
+        <div class="value"><span id="v-level">4</span></div>
+        <button class="step" data-field="level" data-delta="1" aria-label="harder">+</button>
+      </div>
+      <div class="rung" id="v-rung"><span>1.00</span><span>0.95</span><span>0.90</span></div>
+    </div>
+
+    <button id="start">START</button>
+  </section>
+
+  <!-- ======================================================== swim ======= -->
+  <section id="swim" class="screen">
+    <div id="pager">
+
+      <div class="page">
+       <div id="face">
+        <div id="dial">
+          <div id="pips"></div>
+
+          <div class="slot12" id="slot12">
+            <div id="waiting" class="pending"></div>
+            <svg id="heart" class="hide" viewBox="0 0 24 24" aria-hidden="true">
+              <path filter="url(#emboss)"
+                    d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+            </svg>
+            <svg id="tick" class="hide" viewBox="0 0 24 24" aria-hidden="true">
+              <circle id="tickdisc" cx="12" cy="12" r="12" filter="url(#emboss)"/>
+              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="#E6E8DB"
+                    transform="translate(12 12) scale(0.78) translate(-12 -12)"/>
+            </svg>
+          </div>
+
+          <!-- The gears above this one, drawn under the live hand so it sweeps
+               across each as that target passes. -->
+          <div class="markwrap" id="markwrap0"><div class="mark pending" id="mark0"></div></div>
+          <div class="markwrap" id="markwrap1"><div class="mark pending" id="mark1"></div></div>
+
+          <div id="shadowwrap"><div id="shadowbar"></div></div>
+          <div id="handwrap"><div id="hand"></div></div>
+
+          <div id="headline" class="hide"></div>
+          <div id="endword" class="hide"></div>
+          <div id="endchoice" class="hide">
+            <button id="endno" aria-label="no, hold this level">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor"
+                      stroke-width="2.4" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <button id="endyes" aria-label="yes, move up a level">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4.5 12.5l5 5 10-11" fill="none" stroke="currentColor"
+                      stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div id="lapnum" class="hide"></div>
+       </div>
+      </div>
+
+      <div class="page">
+        <div id="controls">
+          <div class="ctlrow">
+            <button class="ctl" id="pause">PAUSE</button>
+            <button class="ctl" id="skip">SKIP</button>
+          </div>
+          <button class="ctl" id="end">END</button>
+          <div class="hint">swipe right for the clock</div>
+        </div>
+      </div>
+
+    </div>
+    <div id="dots"><i class="on"></i><i></i></div>
+  </section>
+
+</div>
+
+<script>
+//
+//  ghost.js
+//  Ghost mode, web edition
+//
+//  A port of the watch app's Ghost pace clock for a phone at the poolside.
+//  The watch reads Apple's pool-length events after the swim; a phone reads
+//  nothing at all, so this runs BLIND: the ghost swims its schedule on the
+//  wall clock and the swimmer races it. Everything downstream of detection —
+//  the HR-gated rest, the post-swim alignment, the progression verdict — has
+//  no counterpart here. The rest is a fixed duration the swimmer picks, and
+//  the ladder level is picked too rather than earned.
+//
+//  Ported from:
+//    Shared/SessionModels.swift            GhostTier, GhostLadder
+//    SwimTrainer Watch App/Logic/GhostWorkoutEngine.swift
+//    SwimTrainer Watch App/Views/GhostClockView.swift
+//    SwimTrainer Watch App/Views/GhostTierStyle.swift
+//
+//  Times are seconds, as Date.now()/1000. Everything is scheduled against
+//  ABSOLUTE timestamps and only sampled by the frame loop — the same discipline
+//  the watch uses, and the reason a backgrounded tab or a throttled timer
+//  cannot make the ghost drift.
+//
+
+'use strict';
+
+/* ============================================================ structure */
+
+// A rep is 10 laps split 2 / 4 / 4. A lap is 50m = 2 pool lengths, and the
+// metronome pulses once per LENGTH. See GhostTier.
+const TIER_LAPS = [2, 4, 4];
+const LAST_TIER = 2;
+
+const WARMUP_LAPS = 5;
+const COOLDOWN_LAPS = 5;
+const TOTAL_REPS = 3;
+const LENGTHS_PER_LAP = 2;
+
+// "5..1" into the warmup, and out of every rest.
+const LEAD_IN = 5.0;
+
+/* ================================================ the ladder (caterpillar) */
+//
+//  Each rung drops exactly ONE tier by one notch, so the ghost tightens in
+//  small bites rather than all three tiers at once. Level 7 would be
+//  0.90/0.90/0.90 — level 1 again at nine tenths of the baseline — so instead
+//  of a rung, passing the top rebases. Verbatim from GhostLadder.
+//
+const RUNGS = [
+  [1.00, 1.00, 1.00],   // level 1   Σ 3.00
+  [1.00, 1.00, 0.95],   // level 2   Σ 2.95
+  [1.00, 0.95, 0.95],   // level 3   Σ 2.90
+  [1.00, 0.95, 0.90],   // level 4   Σ 2.85
+  [0.95, 0.95, 0.90],   // level 5   Σ 2.80
+  [0.95, 0.90, 0.90],   // level 6   Σ 2.75
+];
+const FIRST_LEVEL = 1;
+const TOP_LEVEL = RUNGS.length;
+
+const clampLevel = (l) => Math.min(Math.max(l | 0, FIRST_LEVEL), TOP_LEVEL);
+
+// Passing the top rung doesn't become a seventh: 0.90/0.90/0.90 IS level 1 at
+// nine tenths of the baseline, the identical ghost. So the baseline drops
+// instead and the caterpillar starts over.
+const REBASE_FACTOR = 0.90;
+const MIN_BASELINE_SECONDS = 20;
+
+/** Where a passing session lands. Rounding from the STORED baseline each cycle,
+ *  rather than from an original, keeps the error from compounding. */
+function advanceLadder(level, baseline) {
+  const current = clampLevel(level);
+  if (current < TOP_LEVEL) return { level: current + 1, baseline };
+  return {
+    level: FIRST_LEVEL,
+    baseline: Math.max(Math.round(baseline * REBASE_FACTOR), MIN_BASELINE_SECONDS),
+  };
+}
+
+/** Pace multiplier for a tier at a level. */
+function multiplier(tier, level) {
+  const rung = RUNGS[clampLevel(level) - 1];
+  return rung[Math.min(Math.max(tier, 0), rung.length - 1)];
+}
+
+/* ==================================================================== engine */
+
+const PHASE = {
+  idle: 'idle',
+  warmup: 'warmup',
+  racing: 'racing',
+  rest: 'rest',
+  cooldown: 'cooldown',
+  finished: 'finished',
+};
+
+class GhostEngine {
+  /**
+   * @param {number} baseline    seconds per 50m lap at tier-0 pace
+   * @param {number} level       ladder rung, 1...6
+   * @param {number} restSeconds the whole rest at the wall; its last LEAD_IN
+   *                             seconds are the 5,4,3,2,1 release
+   */
+  constructor({ baseline, level, restSeconds }) {
+    this.baseline = baseline;
+    this.level = clampLevel(level);
+    this.restSeconds = Math.max(restSeconds, LEAD_IN + 1);
+
+    this.phase = PHASE.idle;
+    this.activeTier = 0;
+    this.repIndex = 0;
+    this.pulsesInSegment = 0;
+
+    this.lastPulse = 0;
+    this.nextPulse = 0;
+    this.awaitingFirstPulse = false;
+
+    this.restStart = null;
+    this.restLeadsToRep = null;
+    this.restReleaseStart = null;
+    this.restReleasing = false;
+    this.restCountdownValue = LEAD_IN;
+
+    this.paused = false;
+    this.pauseStart = null;
+  }
+
+  /** Ghost pace for the tier being swum now, per 25m LENGTH. The one place the
+   *  /50m target is halved. */
+  get currentPace() {
+    return (this.baseline / LENGTHS_PER_LAP) * multiplier(this.activeTier, this.level);
+  }
+
+  get isPacing() {
+    return this.phase === PHASE.warmup || this.phase === PHASE.racing || this.phase === PHASE.cooldown;
+  }
+
+  start(now) {
+    this.phase = PHASE.warmup;
+    this.activeTier = 0;
+    this.pulsesInSegment = 0;
+    this.anchorLeadIn(LEAD_IN, now);
+  }
+
+  /** Re-seed the metronome with a lead-in: the first GO lands at its end. */
+  anchorLeadIn(seconds, now) {
+    this.lastPulse = now;
+    this.nextPulse = now + seconds;
+    this.awaitingFirstPulse = true;
+  }
+
+  /** Re-seed free-running from `at` — a tier change or a rest release, where
+   *  the fresh ghost starts at the wall just touched. */
+  anchorFreeRun(at) {
+    this.lastPulse = at;
+    this.nextPulse = at + this.currentPace;
+    this.awaitingFirstPulse = false;
+  }
+
+  /* ------------------------------------------------------------ the loop */
+
+  /** Sample the schedule. Loops so a throttled or backgrounded tab catches up
+   *  exactly rather than swallowing the pulses it slept through. */
+  tick(now) {
+    if (this.paused) return;
+    for (let i = 0; i < 20000; i++) {
+      if (!this.step(now)) return;
+    }
+  }
+
+  /** One unit of progress. Returns true if more may be due at the same `now`. */
+  step(now) {
+    if (this.isPacing) {
+      if (now >= this.nextPulse) { this.firePulse(); return true; }
+      return false;
+    }
+    if (this.phase === PHASE.rest) return this.advanceRest(now);
+    return false;
+  }
+
+  /** The ghost touches the wall. */
+  firePulse() {
+    const wasLeadIn = this.awaitingFirstPulse;
+    this.awaitingFirstPulse = false;
+    this.lastPulse = this.nextPulse;
+
+    // A lead-in's GO opens a segment — it doesn't close a length.
+    if (!wasLeadIn) this.advanceSchedule();
+
+    // A rest parks the metronome and finish() stops it; don't schedule into
+    // either. anchorFreeRun re-seeds on the way out.
+    if (this.isPacing) this.nextPulse = this.lastPulse + this.currentPace;
+  }
+
+  /** One ghost length has elapsed. This — and only this — moves the session on. */
+  advanceSchedule() {
+    this.pulsesInSegment += 1;
+    switch (this.phase) {
+      case PHASE.warmup:
+        // The warmup earns a breather too, so rep 1 starts recovered.
+        if (this.pulsesInSegment >= WARMUP_LAPS * LENGTHS_PER_LAP) this.beginRest(1);
+        break;
+      case PHASE.racing:
+        if (this.pulsesInSegment >= TIER_LAPS[this.activeTier] * LENGTHS_PER_LAP) this.advanceTierOrRest();
+        break;
+      case PHASE.cooldown:
+        if (this.pulsesInSegment >= COOLDOWN_LAPS * LENGTHS_PER_LAP) this.finish();
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** Wall at the end of a tier: gear up, or close the rep into its rest.
+   *  A natural tier change does NOT re-anchor — the next pulse is scheduled one
+   *  fresh pace out from the pulse that just landed, so the gear change is
+   *  seamless and the hand never jumps mid-sweep. */
+  advanceTierOrRest() {
+    if (this.activeTier < LAST_TIER) {
+      this.activeTier += 1;
+      this.pulsesInSegment = 0;
+    } else {
+      this.beginRest(this.repIndex >= TOTAL_REPS ? null : this.repIndex + 1);
+    }
+  }
+
+  /* -------------------------------------------------------------- the rest */
+  //
+  //  On the watch this is gated on heart rate: five hearts fall away as HR
+  //  drops to the recovery target, and only then does the 5,4,3,2,1 run. With
+  //  no HR to read, the swimmer picks the duration instead and the hearts
+  //  become a plain count of the seconds left.
+  //
+
+  beginRest(leadingToRep) {
+    this.restLeadsToRep = leadingToRep;
+    this.phase = PHASE.rest;
+    // The pulse time, not `now` — so a catch-up after a throttled frame can't
+    // stretch the rest by however long the tab was asleep.
+    this.restStart = this.lastPulse;
+    this.restReleaseStart = null;
+    this.restReleasing = false;
+    this.restCountdownValue = LEAD_IN;
+  }
+
+  /** Returns true if the phase moved on. */
+  advanceRest(now) {
+    const releaseAt = this.restStart + this.restSeconds - LEAD_IN;
+    if (!this.restReleasing) {
+      if (now < releaseAt) return false;
+      this.restReleasing = true;
+      this.restReleaseStart = releaseAt;
+      this.restCountdownValue = LEAD_IN;
+    }
+    const left = LEAD_IN - (now - this.restReleaseStart);
+    this.restCountdownValue = Math.max(Math.ceil(left), 0);
+    if (left > 0) return false;
+
+    const at = this.restReleaseStart + LEAD_IN;
+    if (this.restLeadsToRep !== null) this.beginRep(this.restLeadsToRep, at);
+    else this.beginCooldown(at);
+    return true;
+  }
+
+  beginRep(index, at) {
+    this.phase = PHASE.racing;
+    this.repIndex = index;
+    this.activeTier = 0;
+    this.pulsesInSegment = 0;
+    this.clearRest();
+    // The 5,4,3,2,1 already ran; the first ghost touch is the GO now.
+    this.anchorFreeRun(at);
+  }
+
+  beginCooldown(at) {
+    this.phase = PHASE.cooldown;
+    this.activeTier = 0;
+    this.pulsesInSegment = 0;
+    this.clearRest();
+    this.anchorFreeRun(at);
+  }
+
+  clearRest() {
+    this.restReleasing = false;
+    this.restReleaseStart = null;
+    this.restStart = null;
+  }
+
+  finish() {
+    this.phase = PHASE.finished;
+  }
+
+  /* ------------------------------------------------------- pause and skip */
+
+  /** Freeze everything, and on resume shift every absolute timestamp forward by
+   *  the stood-still duration rather than re-anchoring — so the hand resumes
+   *  exactly where it froze. */
+  togglePause(now) {
+    if (this.paused) {
+      const stood = now - this.pauseStart;
+      this.lastPulse += stood;
+      this.nextPulse += stood;
+      if (this.restStart !== null) this.restStart += stood;
+      if (this.restReleaseStart !== null) this.restReleaseStart += stood;
+      this.paused = false;
+      this.pauseStart = null;
+    } else {
+      this.paused = true;
+      this.pauseStart = now;
+    }
+  }
+
+  /** Jump a whole chunk: warmup → its rest, a tier → the next (or the rep's
+   *  rest), cooldown → the end. A rest is not skippable. */
+  skipSegment(now) {
+    if (this.paused) return;
+    switch (this.phase) {
+      case PHASE.warmup:
+        this.pulsesInSegment = WARMUP_LAPS * LENGTHS_PER_LAP;
+        this.beginRest(1);
+        break;
+      case PHASE.racing:
+        if (this.activeTier < LAST_TIER) {
+          this.activeTier += 1;
+          this.pulsesInSegment = 0;
+          // A skip lands mid-length, so the hand needs putting back on the 12.
+          this.anchorFreeRun(now);
+        } else {
+          this.pulsesInSegment = TIER_LAPS[LAST_TIER] * LENGTHS_PER_LAP;
+          this.lastPulse = now;
+          this.beginRest(this.repIndex >= TOTAL_REPS ? null : this.repIndex + 1);
+        }
+        break;
+      case PHASE.cooldown:
+        this.finish();
+        break;
+      default:
+        break;
+    }
+  }
+
+  /* ------------------------------------------------- clock-face readouts */
+
+  /** How far the arm has swung through the current 25m length: 0 and 1 both put
+   *  the tip on the 12, 0.5 lays it horizontal.
+   *
+   *  Measured backwards from the NEXT touch so the arm always arrives vertical
+   *  on the GO. Mid-segment the span is the interval this pulse was actually
+   *  SCHEDULED at, not currentPace — a tier change takes effect on the next
+   *  pulse, and using currentPace would make the arm jump mid-sweep. */
+  armPhase(now) {
+    let span, remaining;
+    if (this.phase === PHASE.rest) {
+      if (!this.restReleasing) return 0;
+      span = this.currentPace;
+      remaining = LEAD_IN - (now - this.restReleaseStart);
+    } else if (this.awaitingFirstPulse) {
+      span = this.currentPace;
+      remaining = this.nextPulse - now;
+    } else {
+      span = this.nextPulse - this.lastPulse;
+      remaining = this.nextPulse - now;
+    }
+    if (!(span > 0)) return 0;
+    return Math.min(Math.max(1 - remaining / span, 0), 1);
+  }
+
+  get lapsCompletedInSegment() {
+    return Math.floor(this.pulsesInSegment / LENGTHS_PER_LAP);
+  }
+
+  /** 0...1 through the current 50m lap — ONE whole revolution of the hand, so
+   *  the lap closes with it back at 12. Parked at 12 through a lead-in: the
+   *  countdown is dead time before the lap exists. */
+  lapPhase(now) {
+    if (this.awaitingFirstPulse || this.phase === PHASE.rest) return 0;
+    const withinLength = this.armPhase(now);
+    const onSecondLength = this.pulsesInSegment % LENGTHS_PER_LAP === 1;
+    return (onSecondLength ? 0.5 : 0) + withinLength / LENGTHS_PER_LAP;
+  }
+
+  /** Whole seconds left in the current lap — the number in the middle of the
+   *  dial counts this straight down. Zero through a lead-in. */
+  lapSecondsRemaining(now) {
+    if (!this.isPacing || this.awaitingFirstPulse) return 0;
+    const toNextPulse = this.nextPulse - now;
+    // First length of the lap? Then a whole further length follows it.
+    const following = this.pulsesInSegment % LENGTHS_PER_LAP === 0 ? this.currentPace : 0;
+    return Math.max(Math.ceil(toNextPulse + following), 0);
+  }
+
+  /** Whole seconds a lap lasts at the current tier. */
+  get lapSecondsTotal() {
+    return Math.round(this.currentPace * LENGTHS_PER_LAP);
+  }
+
+  /** How far through the second the countdown is CURRENTLY showing, 0..<1.
+   *  Every blink keys off this rather than wall-clock half-seconds: the digits
+   *  change on the lap's own schedule, whose phase is arbitrary against the
+   *  reference clock, so a blink anchored to absolute time would drift. */
+  lapSecondProgress(now) {
+    if (!this.isPacing) return null;
+    const toNextPulse = this.nextPulse - now;
+    const following = this.awaitingFirstPulse ? 0
+      : (this.pulsesInSegment % LENGTHS_PER_LAP === 0 ? this.currentPace : 0);
+    const exact = Math.max(toNextPulse + following, 0);
+    return 1 - (exact - Math.floor(exact));
+  }
+
+  /** True through the half of each displayed second that belongs to the digit
+   *  and the filled lap pip. */
+  onDigitBeat(now) {
+    const p = this.lapSecondProgress(now);
+    return (p === null ? now - Math.floor(now) : p) >= 0.5;
+  }
+
+  /** Tier of the lap being swum now. Null outside a rep — warmup and cooldown
+   *  aren't tiered and render in ink. */
+  get currentLapTier() {
+    return this.phase === PHASE.racing ? this.activeTier : null;
+  }
+
+  /** Whether a hand waits at 12 at all. False only when nothing follows the lap
+   *  being swum. */
+  get showsNextHand() {
+    switch (this.phase) {
+      case PHASE.warmup: return true;
+      case PHASE.cooldown: return this.lapsCompletedInSegment < COOLDOWN_LAPS - 1;
+      case PHASE.racing: {
+        const onLastLapOfTier = this.lapsCompletedInSegment === TIER_LAPS[this.activeTier] - 1;
+        return !(onLastLapOfTier && this.activeTier === LAST_TIER);
+      }
+      default: return false;
+    }
+  }
+
+  /** Closing lap of a rep — or of the WARMUP, which earns the same rest. The
+   *  face swaps its waiting marker for a heart on this lap. */
+  get nextIsRest() {
+    switch (this.phase) {
+      case PHASE.warmup:
+        return this.lapsCompletedInSegment === WARMUP_LAPS - 1;
+      case PHASE.racing:
+        return this.lapsCompletedInSegment === TIER_LAPS[this.activeTier] - 1
+            && this.activeTier === LAST_TIER;
+      default: return false;
+    }
+  }
+
+  /** Closing lap of the cooldown, where the session's end follows. */
+  get nextIsFinish() {
+    return this.phase === PHASE.cooldown && this.lapsCompletedInSegment === COOLDOWN_LAPS - 1;
+  }
+
+  /** Tier of the NEXT lap — the colour of the hand waiting at 12. Null renders
+   *  it in ink. The warmup never previews a tier: what follows its closing lap
+   *  is the rest, so nextIsRest puts a heart there instead. */
+  get nextLapTier() {
+    switch (this.phase) {
+      case PHASE.warmup: return null;
+      case PHASE.racing: {
+        const onLastLapOfTier = this.lapsCompletedInSegment === TIER_LAPS[this.activeTier] - 1;
+        if (!onLastLapOfTier) return this.activeTier;          // same tier continues
+        return this.activeTier < LAST_TIER ? this.activeTier + 1 : null;
+      }
+      default: return null;                                     // cooldown: ink
+    }
+  }
+
+  /** The number on screen during a lead-in — the 5,4,3,2,1 into the warmup, or
+   *  out of a rest. Null once a lap is running. No "GO": on a clock face the
+   *  hand leaving 12 IS the go. */
+  leadInCount(now) {
+    if (this.phase === PHASE.rest) {
+      if (!this.restReleasing || this.restCountdownValue <= 0) return null;
+      return String(this.restCountdownValue);
+    }
+    if (!this.awaitingFirstPulse) return null;
+    const remaining = Math.ceil(this.nextPulse - now);
+    return remaining > 0 ? String(remaining) : null;
+  }
+
+  /** Whole seconds left of the rest. Stands in for the watch's five recovery
+   *  hearts, which have no counterpart without a heart-rate reading. */
+  restSecondsRemaining(now) {
+    if (this.phase !== PHASE.rest) return 0;
+    return Math.max(Math.ceil(this.restStart + this.restSeconds - now), 0);
+  }
+
+  /** Lap pips under the dial: one row per tier inside a rep (2, 4, 4), or a
+   *  single row of 5 for warmup and cooldown. The pips RESET at each gear
+   *  change instead of running 1-10 across the rep. */
+  pipRows() {
+    switch (this.phase) {
+      case PHASE.racing: {
+        const rows = TIER_LAPS.map((laps, tier) => {
+          let done;
+          if (tier < this.activeTier) done = laps;
+          else if (tier === this.activeTier) done = this.lapsCompletedInSegment;
+          else done = 0;
+          return { tier, total: laps, done };
+        });
+        return { rows, activeRow: this.activeTier, activeLap: this.lapsCompletedInSegment };
+      }
+      case PHASE.warmup:
+        return { rows: [{ tier: null, total: WARMUP_LAPS, done: this.lapsCompletedInSegment }], activeRow: 0, activeLap: this.lapsCompletedInSegment };
+      case PHASE.cooldown:
+        return { rows: [{ tier: null, total: COOLDOWN_LAPS, done: this.lapsCompletedInSegment }], activeRow: 0, activeLap: this.lapsCompletedInSegment };
+      default:
+        return { rows: [], activeRow: null, activeLap: null };
+    }
+  }
+
+  /** Raw values of the tiers FASTER than the one being swum. Empty outside a
+   *  rep, and empty on the closing tier, which has no gear above it. */
+  fasterTiers() {
+    if (this.currentLapTier === null) return [];
+    return [0, 1, 2].filter((t) => t > this.currentLapTier);
+  }
+
+  /** Fraction of THIS revolution at which a faster tier's target falls.
+   *
+   *      turns = fasterMultiplier / currentMultiplier
+   *
+   *  The denominator is the CURRENT tier's multiplier, not 1: the metronome
+   *  re-times itself at every gear change, so the ghost being chased right now
+   *  always closes at 12 and the dial rescales beneath the marks. At level 4
+   *  the marks land at 342° and 324° on tier 0; on tier 1 the single 0.90 mark
+   *  sits at 0.90/0.95 = 0.947 → 341°, slightly LATER in the revolution than it
+   *  was a gear ago. A ratio of exactly 1 puts the mark at 12 under the live
+   *  hand, which is truthful: there is no gear to chase. */
+  turnsForTier(tier) {
+    if (this.currentLapTier === null) return 0;
+    return multiplier(tier, this.level) / multiplier(this.currentLapTier, this.level);
+  }
+
+  /** The faster gears actually worth a mark on this revolution, as
+   *  `{ tier, turns }`, already thinned of the two ways a mark says nothing:
+   *
+   *   · A LATER TIER AT THIS TIER'S PACE. Its ratio is exactly 1, so the mark
+   *     lands on the 12 — underneath the stub already waiting there, showing
+   *     through it as a darker stripe and promising a gear change that isn't
+   *     one. Every rung above the first has at least two tiers level, so this
+   *     is the common case, not the corner one.
+   *   · TWO GEARS AT THE SAME PACE. Level 6 runs ×0.90 twice; both marks would
+   *     land on the same angle and stack two pale washes into one darker line.
+   *
+   *  What survives is one mark per pace that is genuinely quicker than the one
+   *  being swum — which is the only thing a mark on this dial can mean.
+   */
+  paceMarks() {
+    const marks = [];
+    for (const tier of this.fasterTiers()) {
+      const turns = this.turnsForTier(tier);
+      if (turns >= 1 - 1e-9) continue;
+      if (marks.some((m) => Math.abs(m.turns - turns) < 1e-9)) continue;
+      marks.push({ tier, turns });
+    }
+    return marks;
+  }
+}
+</script>
+
+<script>
+//
+//  app.js
+//  Ghost mode, web edition — screens, layout and the frame loop.
+//
+//  The dial is a faithful port of GhostClockFace: every offset comes from the
+//  same GhostFaceLayout formulas, scaled off the dial's width the way the watch
+//  scales off the screen's. Nothing here decides anything about the swim — it
+//  only draws whatever GhostEngine says is true at this instant.
+//
+
+'use strict';
+
+/* ================================================== GhostFaceLayout, ported */
+//
+//  All offsets are from the face centre and scale off the dial WIDTH, which is
+//  the axis the dial is sized against. pipDot and pipSpacing are fixed points on
+//  the watch (10 and 6 against a 198pt screen); here they keep that ratio so the
+//  face reads identically at any phone size.
+//
+const L = {
+  handReach: 0.47,          // × width, pivot to tip
+  handTail: 0.13,           // × reach, overhang past the pivot
+  handWeight: 0.10,         // × reach
+  pipDot: 10 / 198,         // × width
+  pipSpacing: 6 / 198,      // × width
+  tierMarkerWeight: 0.045,  // × reach — under half the hand's, a graduation
+  waitingOuter: 0.80,
+  headlineScale: 1.35,      // × pipBlockHeight
+  lapNumScale: 0.26,        // × width — the phone's own addition, below the dial
+};
+
+/* ======================================================== settings & state */
+
+const RANGE = {
+  baseline: [30, 180],   // seconds per 50m lap, matching the watch's wheel
+  rest: [10, 180],
+  level: [FIRST_LEVEL, TOP_LEVEL],
+};
+
+// What a query parameter may set — wide enough to run a whole session on land
+// in a few minutes. The steppers stay inside RANGE.
+const DEBUG_RANGE = {
+  baseline: [4, 600],
+  rest: [6, 600],
+  level: [FIRST_LEVEL, TOP_LEVEL],
+};
+
+const settings = { baseline: 60, rest: 45, level: 4 };
+
+/** A query parameter set something, so nothing this run touches storage. */
+let debugRun = false;
+
+let engine = null;
+let raf = null;
+let wakeLock = null;
+let page = 0;
+
+const $ = (id) => document.getElementById(id);
+
+const el = {
+  setup: $('setup'), swim: $('swim'), pager: $('pager'), dots: $('dots'),
+  face: $('face'), dial: $('dial'), pips: $('pips'),
+  slot12: $('slot12'), waiting: $('waiting'), heart: $('heart'), tick: $('tick'),
+  markwrap: [$('markwrap0'), $('markwrap1')],
+  mark: [$('mark0'), $('mark1')],
+  handwrap: $('handwrap'), hand: $('hand'), shadowwrap: $('shadowwrap'),
+  headline: $('headline'), endword: $('endword'), endchoice: $('endchoice'),
+  lapnum: $('lapnum'),
+  start: $('start'), pause: $('pause'), skip: $('skip'), end: $('end'),
+};
+
+/*
+  COLOUR IS THE PACE, NOT THE POSITION.
+
+  One colour per multiplier — slate blue for a lap at the baseline, yellow at
+  ×0.95, orange-red at ×0.90 — so a colour on screen always means the same
+  speed whatever rung you are on. At level 4 (1.00/0.95/0.90) the three tiers
+  come out blue, yellow, red, which is what the fixed scheme always looked
+  like; at level 6 (0.95/0.90/0.90) they are yellow, red, red, because that is
+  what the swimmer is actually being asked for.
+*/
+const PACE_RGB = ['110, 140, 146', '234, 173, 59', '217, 94, 66'];   // 1.00 / 0.95 / 0.90
+const INK_RGB = '33, 33, 25';
+
+/** Colour for a tier at a level; ink for anything untiered (warmup, cooldown). */
+function rgbForTier(tier, level) {
+  if (tier === null || tier === undefined) return INK_RGB;
+  const notches = Math.round((1 - multiplier(tier, level)) / 0.05);
+  return PACE_RGB[Math.min(Math.max(notches, 0), PACE_RGB.length - 1)];
+}
+
+/* ==================================================================== sizing */
+
+function layout() {
+  // The dial is width-bound on a phone held upright, leaving room beneath it
+  // for the lap countdown; height-bound on its side.
+  const D = Math.min(window.innerWidth * 0.94, window.innerHeight * 0.70);
+  const reach = D * L.handReach;
+  const pip = D * L.pipDot;
+  const gap = D * L.pipSpacing;
+  const block = 3 * pip + 2 * gap;
+
+  const s = document.documentElement.style;
+  s.setProperty('--D', D + 'px');
+  s.setProperty('--reach', reach + 'px');
+  s.setProperty('--tail', reach * L.handTail + 'px');
+  s.setProperty('--weight', reach * L.handWeight + 'px');
+  s.setProperty('--pip', pip + 'px');
+  s.setProperty('--gap', gap + 'px');
+  s.setProperty('--block', block + 'px');
+  // The pip block sits this far BELOW the pivot; the marker slot the same
+  // distance above it. One value places both — they are mirror images about
+  // the 3-9 line.
+  s.setProperty('--mc', (D * L.handReach * L.waitingOuter - block / 2) + 'px');
+  s.setProperty('--headline', block * L.headlineScale + 'px');
+  s.setProperty('--markw', reach * L.tierMarkerWeight + 'px');
+  s.setProperty('--lapnum', D * L.lapNumScale + 'px');
+  // How far below the hand its shadow falls, in screen space.
+  s.setProperty('--sdy', reach * L.handWeight * 0.30 + 'px');
+
+  if (engine) setPage(page, false);
+}
+
+/* ============================================================ setup screen */
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('ghost.settings') || '{}');
+    for (const k of Object.keys(settings)) {
+      if (typeof saved[k] === 'number') settings[k] = saved[k];
+    }
+  } catch (_) { /* first run, or storage blocked */ }
+
+  for (const k of Object.keys(settings)) settings[k] = clampSetting(k, settings[k]);
+
+  // URL overrides, for a land test: ?baseline=15&rest=10 rips a whole 80-length
+  // session through in minutes. Deliberately allowed outside the steppers'
+  // range — nobody swims a 15-second 50, which is the point.
+  const q = new URLSearchParams(location.search);
+  for (const k of Object.keys(settings)) {
+    const v = parseFloat(q.get(k));
+    if (!Number.isFinite(v)) continue;
+    const [lo, hi] = DEBUG_RANGE[k];
+    settings[k] = Math.min(Math.max(Math.round(v), lo), hi);
+    // A land test must not outlive the run it was meant for. Without this the
+    // 15-second ghost is written back on START and every later swim opens at a
+    // target nobody could hold — the same defect the watch app hit when its
+    // debug flag was persisted rather than read per launch.
+    debugRun = true;
+  }
+}
+
+function clampSetting(field, v) {
+  const [lo, hi] = RANGE[field];
+  return Math.min(Math.max(Math.round(v), lo), hi);
+}
+
+function saveSettings() {
+  if (debugRun) return;
+  try { localStorage.setItem('ghost.settings', JSON.stringify(settings)); } catch (_) {}
+}
+
+function drawSetup() {
+  $('v-baseline').textContent = settings.baseline;
+  $('v-rest').textContent = settings.rest;
+  $('v-level').textContent = settings.level;
+  const rung = RUNGS[clampLevel(settings.level) - 1];
+  $('v-rung').innerHTML = rung
+    .map((m, tier) => `<span style="--c-rgb:${rgbForTier(tier, settings.level)}">${m.toFixed(2)}</span>`)
+    .join('');
+}
+
+function bump(field, delta) {
+  settings[field] = clampSetting(field, settings[field] + delta);
+  drawSetup();
+  saveSettings();
+}
+
+// Press and hold to run: the baseline spans 30-180s and nobody should have to
+// tap 150 times to cross it.
+for (const btn of document.querySelectorAll('.step')) {
+  let timer = null, interval = null;
+  const field = btn.dataset.field;
+  const delta = parseInt(btn.dataset.delta, 10);
+  const stop = () => { clearTimeout(timer); clearInterval(interval); timer = interval = null; };
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    bump(field, delta);
+    timer = setTimeout(() => { interval = setInterval(() => bump(field, delta), 55); }, 420);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) btn.addEventListener(ev, stop);
+}
+
+el.start.addEventListener('click', startSession);
+
+/* ============================================================ wake lock */
+//
+//  A 40-minute session with the phone face-up on the poolside is exactly the
+//  case a screen timeout ruins. Needs a secure origin (https, or localhost);
+//  over plain http on a LAN it simply won't be granted, and the screen will
+//  sleep — see README.
+//
+
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch (_) { wakeLock = null; }
+}
+
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+}
+
+// Android drops the lock whenever the tab is hidden; take it back on return.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && engine && !wakeLock) acquireWakeLock();
+});
+
+/* ================================================================= session */
+
+function startSession() {
+  engine = new GhostEngine({
+    baseline: settings.baseline,
+    level: settings.level,
+    restSeconds: settings.rest,
+  });
+  engine.start(Date.now() / 1000);
+
+  pipSignature = '';
+  el.setup.classList.remove('on');
+  el.swim.classList.add('on');
+  setPage(0, false);
+  acquireWakeLock();
+  raf = requestAnimationFrame(frame);
+  saveSettings();
+}
+
+function endSession() {
+  if (raf) cancelAnimationFrame(raf);
+  raf = null;
+  engine = null;
+  releaseWakeLock();
+  el.swim.classList.remove('on');
+  el.setup.classList.add('on');
+}
+
+el.end.addEventListener('click', endSession);
+el.pause.addEventListener('click', () => {
+  if (!engine) return;
+  engine.togglePause(Date.now() / 1000);
+  el.pause.textContent = engine.paused ? 'PLAY' : 'PAUSE';
+});
+el.skip.addEventListener('click', () => { if (engine) engine.skipSegment(Date.now() / 1000); });
+
+/** Answer the end-of-session question, then go back to the setup screen — where
+ *  the steppers now read the new level, which is the confirmation. Nothing else
+ *  needs to say what happened. */
+function answerLevelUp(moved) {
+  if (moved) {
+    const next = advanceLadder(settings.level, settings.baseline);
+    settings.level = next.level;
+    settings.baseline = next.baseline;
+    drawSetup();
+    saveSettings();
+  }
+  endSession();
+}
+$('endyes').addEventListener('click', () => answerLevelUp(true));
+$('endno').addEventListener('click', () => answerLevelUp(false));
+
+/* ============================================================== frame loop */
+
+function frame() {
+  raf = requestAnimationFrame(frame);
+  engine.tick(Date.now() / 1000);
+  // PAUSE parks the schedule, but every readout is measured against the clock
+  // being passed in — so the face has to be drawn at the instant it froze, or
+  // the hand carries on sweeping over a ghost that has stopped.
+  render(engine.paused ? engine.pauseStart : Date.now() / 1000);
+}
+
+/* ================================================================ the face */
+
+let pipSignature = '';
+
+function buildPips(rows, level) {
+  el.pips.innerHTML = '';
+  for (const row of rows) {
+    const r = document.createElement('div');
+    r.className = 'piprow';
+    r.style.setProperty('--c-rgb', rgbForTier(row.tier, level));
+    for (let i = 0; i < row.total; i++) {
+      const p = document.createElement('div');
+      p.className = 'pip pending';
+      r.appendChild(p);
+    }
+    el.pips.appendChild(r);
+  }
+}
+
+const show = (node, on) => node.classList.toggle('hide', !on);
+
+function setText(node, text) {
+  if (node.textContent !== text) node.textContent = text;
+}
+
+function render(now) {
+  const e = engine;
+  const finished = e.phase === PHASE.finished;
+  const resting = e.phase === PHASE.rest;
+  const lead = finished ? null : e.leadInCount(now);
+  // A lead-in outranks everything on the face: no lap is running yet, so a
+  // sweeping hand would be a lie.
+  const pacing = !finished && !resting && lead === null;
+
+  /* --- pips ------------------------------------------------------------- */
+  const built = e.pipRows();
+  const sig = built.rows.map((r) => `${r.tier}:${r.total}`).join('|');
+  if (sig !== pipSignature) { buildPips(built.rows, e.level); pipSignature = sig; }
+  show(el.pips, !resting && !finished);
+
+  if (!resting && !finished) {
+    const blinkOn = e.onDigitBeat(now);
+    const rowNodes = el.pips.children;
+    for (let r = 0; r < built.rows.length; r++) {
+      const row = built.rows[r];
+      const pips = rowNodes[r].children;
+      for (let i = 0; i < row.total; i++) {
+        const isActive = r === built.activeRow && i === built.activeLap;
+        const on = i < row.done || (isActive && pacing && blinkOn);
+        pips[i].classList.toggle('on', on);
+      }
+    }
+  }
+
+  /* --- the marker slot at 12 -------------------------------------------- */
+  // The tick announces the finish on the closing cooldown lap and then hands
+  // the slot over: once the swim is actually over, the question stands there.
+  const slotVisible = pacing && (e.nextIsFinish || e.nextIsRest || e.showsNextHand);
+  show(el.slot12, slotVisible);
+  show(el.tick, pacing && e.nextIsFinish);
+  show(el.heart, pacing && !e.nextIsFinish && e.nextIsRest);
+  show(el.waiting, pacing && !e.nextIsFinish && !e.nextIsRest && e.showsNextHand);
+  if (pacing) el.waiting.style.setProperty('--c-rgb', rgbForTier(e.nextLapTier, e.level));
+
+  /* --- faster-tier pace lines ------------------------------------------- */
+  const faster = pacing ? e.paceMarks() : [];
+  for (let i = 0; i < el.markwrap.length; i++) {
+    const m = faster[i];
+    show(el.markwrap[i], m !== undefined);
+    if (m === undefined) continue;
+    el.mark[i].style.setProperty('--c-rgb', rgbForTier(m.tier, e.level));
+    el.markwrap[i].style.transform = `rotate(${m.turns * 360}deg)`;
+  }
+
+  /* --- the hand ---------------------------------------------------------- */
+  show(el.handwrap, pacing);
+  show(el.shadowwrap, pacing);
+  if (pacing) {
+    const deg = e.lapPhase(now) * 360;
+    el.handwrap.style.transform = `rotate(${deg}deg)`;
+    // Rotate in the hand's space, offset in the screen's — so the light stays
+    // above the face rather than turning with the hand.
+    el.shadowwrap.style.transform = `translateY(var(--sdy)) rotate(${deg}deg)`;
+    el.hand.style.setProperty('--c-rgb', rgbForTier(e.currentLapTier, e.level));
+  }
+
+  /* --- type -------------------------------------------------------------- */
+  // The box at the top says only what the number below it is counting, and only
+  // when that isn't obvious: REST. A lap needs no label and neither does the
+  // 5,4,3,2,1 into the first one.
+  show(el.headline, resting);
+  if (resting) setText(el.headline, 'REST');
+
+  // The swim is over and the swimmer is the only one who knows how it went —
+  // the watch earns a level from Apple's measured splits, and there is nothing
+  // here to measure. So it asks.
+  show(el.endword, finished);
+  show(el.endchoice, finished);
+  if (finished) setText(el.endword, 'HELD THE GHOST?');
+
+  // ONE number, in ONE place, whatever is being counted — the 5,4,3,2,1 into
+  // the session, the seconds left of this lap while swimming, the seconds left
+  // of the rest while standing. It never moves and never resizes, so the thing
+  // you look for is always where you last looked.
+  //
+  // Ink for anything untiered, which covers the opening count and every rest.
+  // The rest's count runs unbroken to 1: the watch swaps a REST screen for a
+  // 5,4,3,2,1 release because it can't know how long a heart-rate gate will
+  // take, and here it is a number the swimmer chose.
+  const count = resting ? String(e.restSecondsRemaining(now))
+              : lead !== null ? lead
+              : pacing ? String(e.lapSecondsRemaining(now))
+              : null;
+  show(el.lapnum, count !== null);
+  if (count !== null) {
+    setText(el.lapnum, count);
+    el.lapnum.style.color = `rgb(${rgbForTier(resting ? null : e.currentLapTier, e.level)})`;
+  }
+}
+
+/* ================================================================== pager */
+//
+//  Page 0 is the face, page 1 the controls — the watch's LiveWithControls. The
+//  face carries no controls of its own: a wet hand at a wall must not be able
+//  to change the schedule by brushing the screen.
+//
+
+function setPage(p, animate = true) {
+  page = p;
+  el.pager.classList.toggle('settling', animate);
+  el.pager.style.transform = `translateX(${-p * window.innerWidth}px)`;
+  const dots = el.dots.children;
+  for (let i = 0; i < dots.length; i++) dots[i].classList.toggle('on', i === p);
+}
+
+(function wirePager() {
+  let startX = 0, startY = 0, dragging = false, decided = false, swallowClick = false;
+
+  // A swipe that begins on a button is still a swipe. Letting the drag start
+  // anywhere is what makes the gesture reliable — END sits across the middle of
+  // the controls page, so swiping back to the clock from anywhere sensible
+  // starts on it — and this then eats the click the browser fires afterwards.
+  el.pager.addEventListener('click', (ev) => {
+    if (!swallowClick) return;
+    ev.stopPropagation();
+    ev.preventDefault();
+  }, true);
+
+  el.pager.addEventListener('pointerdown', (ev) => {
+    startX = ev.clientX; startY = ev.clientY;
+    dragging = true; decided = false; swallowClick = false;
+    el.pager.classList.remove('settling');
+  });
+
+  el.pager.addEventListener('pointermove', (ev) => {
+    if (!dragging) return;
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    if (!decided) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      decided = true;
+      if (Math.abs(dy) > Math.abs(dx)) { dragging = false; return; }
+    }
+    // Rubber-band past the ends rather than tearing off the edge.
+    const w = window.innerWidth;
+    let x = -page * w + dx;
+    if (x > 0) x *= 0.3;
+    if (x < -w) x = -w + (x + w) * 0.3;
+    el.pager.style.transform = `translateX(${x}px)`;
+  });
+
+  const finish = (ev) => {
+    if (!dragging) return;
+    dragging = false;
+    const dx = (ev.clientX || 0) - startX;
+    const w = window.innerWidth;
+    let next = page;
+    if (decided && Math.abs(dx) > w * 0.25) next = dx < 0 ? Math.min(page + 1, 1) : Math.max(page - 1, 0);
+    swallowClick = decided;
+    setPage(next);
+  };
+  el.pager.addEventListener('pointerup', finish);
+  el.pager.addEventListener('pointercancel', () => { dragging = false; setPage(page); });
+})();
+
+/* ==================================================================== boot */
+
+window.addEventListener('resize', layout);
+window.addEventListener('orientationchange', () => setTimeout(layout, 120));
+
+loadSettings();
+drawSetup();
+layout();
+
+// Reading navigator.serviceWorker THROWS in a sandboxed frame rather than being
+// absent, so the `in` check isn't enough on its own and the whole access has to
+// sit inside the try.
+window.addEventListener('load', () => {
+  try {
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  } catch (_) { /* sandboxed preview — no offline cache, and nothing to be done */ }
+});
+</script>
+</body>
+</html>

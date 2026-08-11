@@ -1,0 +1,7 @@
+# macOS
+.DS_Store
+
+# Local tooling — the headless browser used to check the face renders
+node_modules/
+package-lock.json
+package.json
