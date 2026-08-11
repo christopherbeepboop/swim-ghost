@@ -36,7 +36,8 @@ left of the rest while you're standing. It never moves and never resizes, so the
 thing you glance at is always where you last looked.
 - **The level is answered, not measured.** The watch moves you up the ladder
   when all three reps land on target. There is nothing here to measure, so at
-  the end of a session it asks — *held the ghost?* — and a tick steps the rung.
+  the end of a session it asks — *go up a level next time?* — and a tick steps
+  the rung.
   You can also just set it yourself on the setup screen.
 
 ## What it remembers

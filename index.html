@@ -382,7 +382,7 @@ html, body {
   top: 50%;
   transform: translate(-50%, calc(-50% - var(--mc)));
   font-size: calc(var(--headline) * 0.19);
-  letter-spacing: 2px;
+  letter-spacing: 1px;
   opacity: 0.6;
   white-space: nowrap;
 }
@@ -1735,7 +1735,7 @@ function render(now) {
   show(el.endword, finished);
   show(el.endchoice, finished);
   show(el.controls, !finished);
-  if (finished) setText(el.endword, 'HELD THE GHOST?');
+  if (finished) setText(el.endword, 'GO UP A LEVEL NEXT TIME?');
 
   // ONE number, in ONE place, whatever is being counted — the 5,4,3,2,1 into
   // the session, the seconds left of this lap while swimming, the seconds left
