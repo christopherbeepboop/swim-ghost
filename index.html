@@ -133,8 +133,8 @@ html, body {
 }
 .value .unit { font-size: 24px; opacity: 0.6; margin-left: 1px; }
 
-/* The rung the chosen level swims — the three tier multipliers. A level is
-   otherwise an opaque number, and this is its definition, not decoration. */
+/* The three lap times the chosen level asks for. A level is otherwise an opaque
+   number, and this is what it means in seconds — not decoration. */
 .rung {
   margin-top: 10px;
   font-size: 15px;
@@ -504,7 +504,7 @@ html, body {
         <div class="value"><span id="v-level">4</span></div>
         <button class="step" data-field="level" data-delta="1" aria-label="harder">+</button>
       </div>
-      <div class="rung" id="v-rung"><span>1.00</span><span>0.95</span><span>0.90</span></div>
+      <div class="rung" id="v-rung"></div>
     </div>
 
     <button id="start">START</button>
@@ -1389,9 +1389,14 @@ function drawSetup() {
   $('v-baseline').textContent = settings.baseline;
   $('v-rest').textContent = settings.rest;
   $('v-level').textContent = settings.level;
-  const rung = RUNGS[clampLevel(settings.level) - 1];
-  $('v-rung').innerHTML = rung
-    .map((m, tier) => `<span style="--c-rgb:${rgbForTier(tier, settings.level)}">${m.toFixed(2)}</span>`)
+  // The three tiers as the times they actually are, not the fractions they are
+  // built from: what a level asks of you is three lap times, and 0.95 is not
+  // one. Re-read from the target on every tap, so the three move with it.
+  $('v-rung').innerHTML = [0, 1, 2]
+    .map((tier) => {
+      const seconds = Math.round(settings.baseline * multiplier(tier, settings.level));
+      return `<span style="--c-rgb:${rgbForTier(tier, settings.level)}">${seconds}s</span>`;
+    })
     .join('');
 }
 

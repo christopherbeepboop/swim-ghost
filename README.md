@@ -67,7 +67,8 @@ A rep is 10 laps split 2 / 4 / 4, one tier each. A lap is 50m — out and back i
 is 41 minutes and 2000m.
 
 **TARGET / 50m** is the tier-1 lap time. **LEVEL** decides what the other two
-tiers multiply it by:
+tiers multiply it by — the setup screen shows all three as the lap times they
+come to, in the tier colours, and they move as you change the target:
 
 | level | tier 1 | tier 2 | tier 3 | rep |
 |-------|--------|--------|--------|-----|
