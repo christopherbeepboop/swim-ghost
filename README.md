@@ -117,12 +117,12 @@ it (Android has no equivalent).
 
 ## Using it
 
-Swipe **left** on the clock for PAUSE, SKIP and END. Mid-lap the face itself is
-untappable — a wet hand at a wall must not be able to change the schedule — but
-a rest carries a SKIP that jumps to the closing 5,4,3,2,1, and the end screen
-takes your answer.
+Three buttons under the clock: **pause/play**, **skip**, **end**.
 
-**END finishes the swim rather than abandoning it**: it goes to the same screen
+Skip does whichever thing there is to skip — a rest jumps to its closing five
+seconds, a lap or a tier being swum jumps to the next segment.
+
+**End finishes the swim rather than abandoning it**: it goes to the same screen
 a completed cooldown reaches, says the swim was ended early, and still asks
 whether to move up. A short swim can still have been held.
 
